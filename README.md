@@ -106,6 +106,18 @@ Sample generations at the final checkpoint:
 
 Coherent dialogue, consistent character names across the whole generation, plausible (if simple) plot logic — a genuinely finished, working checkpoint. This is the first run in this whole process that completed a full training schedule on Kaggle without being cut off by the session timeout, crashing on a GPU mismatch, or failing to find its own source code.
 
+A second Kaggle run (version 6, actually pulling the fixed 100.7M/16-layer config this time — see the mistake documented above) was launched and left training unattended. Its outcome isn't recorded here: the session tracking it went stale for an extended period, and by the time work resumed the short-lived Kaggle API token used to check on it had long expired. Rather than fight Kaggle's auth flow again, the decision was to move future runs to Google Colab instead — its outcome can be checked directly at [kaggle.com/code/adityapandey444/zenith-ai-kaggle-train](https://www.kaggle.com/code/adityapandey444/zenith-ai-kaggle-train) if you have access to that account, but this repo doesn't depend on it.
+
+## Training on Google Colab
+
+`configs/zenith_colab.yaml` and `colab/zenith_colab_train.ipynb` train the same ~100.7M-param architecture on a free Colab GPU (T4 by default). It's structurally the same pipeline as the Kaggle notebook (GPU-compatibility check, data pipeline, train, generate), with two differences that matter:
+
+**No launch/monitor API.** Kaggle's `kaggle kernels push` let this process launch a run and poll its status without a human in the loop. Colab's free tier has no equivalent — this notebook has to be opened in a browser and run manually (`Runtime` → `Run all`), and checking on it means checking the tab, not asking an agent to query an API. If you're delegating this to an assistant, expect to be the one reporting back "is it done" rather than the other way around.
+
+**Google Drive instead of the checkpoint-dataset dance.** Kaggle's `/kaggle/working` is wiped every session, so resuming a cut-off run meant manually saving checkpoints as a Kaggle Dataset and reattaching it as input on the next run — see the "Optional: resume" cell in the Kaggle notebook. Colab's local disk is equally ephemeral, but mounting Google Drive (`colab/zenith_colab_train.ipynb`'s second cell) and pointing `checkpoint_dir` and the data paths at `/content/drive/MyDrive/zenith_ai/` in `configs/zenith_colab.yaml` sidesteps that entirely — rerunning the notebook in a brand new session just finds `latest.pt` and the already-packed dataset sitting there and resumes/skips automatically, no manual reattach step.
+
+Everything else learned from the Kaggle runs — size `total_steps` to the throughput actually measured on whatever GPU you land on rather than an assumed best case, don't trust `torch.cuda.is_available()` alone, push config changes to GitHub *before* launching a run that clones from GitHub — applies here too, and the notebook already accounts for all of it.
+
 ## Usage
 
 ```bash
