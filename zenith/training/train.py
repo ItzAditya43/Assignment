@@ -1,6 +1,7 @@
 import argparse
 import math
 import os
+import signal
 import time
 
 import torch
@@ -48,6 +49,10 @@ def main():
 
     torch.manual_seed(cfg_dict.get("seed", 1337) + rank)
 
+    cpu_threads = cfg_dict.get("training", {}).get("cpu_threads")
+    if cpu_threads:
+        torch.set_num_threads(cpu_threads)
+
     model_cfg = ZenithConfig(**cfg_dict["model"])
     model = ZenithTransformer(model_cfg).to(device)
 
@@ -78,12 +83,24 @@ def main():
         from torch.utils.data.distributed import DistributedSampler
         sampler = DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True)
 
+    # A dedicated, OS-entropy-seeded generator for shuffling — deliberately NOT
+    # derived from the reproducible `seed` above. That seed is set fresh via
+    # torch.manual_seed() on every process launch (including every resume),
+    # which would otherwise reset the DataLoader's shuffle order to the exact
+    # same permutation each time and replay the same early batches on every
+    # restart instead of progressing through the dataset (caught via a
+    # diverging train/val loss: train loss collapsed toward 0 while val
+    # perplexity got worse, across ~20 watchdog-triggered restarts).
+    shuffle_generator = torch.Generator()
+    shuffle_generator.manual_seed(int.from_bytes(os.urandom(8), "little"))
+
     train_loader = DataLoader(
         train_ds,
         batch_size=train_cfg["micro_batch_size"],
         shuffle=(sampler is None),
         sampler=sampler,
-        num_workers=2,
+        generator=shuffle_generator if sampler is None else None,
+        num_workers=train_cfg.get("num_workers", 2),
         pin_memory=True,
         drop_last=True,
     )
@@ -110,11 +127,24 @@ def main():
 
     scaler = torch.amp.GradScaler(enabled=use_amp and dtype == torch.float16)
 
+    stop_requested = {"flag": False}
+
+    def _request_stop(signum, frame):
+        # Save-and-exit on the next safe point instead of dying mid-step, so a
+        # watchdog (thermal/memory limit) or a manual Ctrl-C never loses more
+        # than one optimizer step of progress.
+        stop_requested["flag"] = True
+        if is_master:
+            print(f"\nReceived signal {signum} — will checkpoint and stop after the current step.")
+
+    signal.signal(signal.SIGTERM, _request_stop)
+    signal.signal(signal.SIGINT, _request_stop)
+
     model.train()
     data_iter = iter(train_loader)
     t0 = time.time()
 
-    while step < total_steps:
+    while step < total_steps and not stop_requested["flag"]:
         lr = cosine_with_warmup(step, warmup_steps, total_steps, max_lr, min_lr)
         for g in optimizer.param_groups:
             g["lr"] = lr
@@ -166,7 +196,10 @@ def main():
 
     if is_master:
         save_checkpoint(resume_path, model, optimizer, step, model_cfg)
-        print("Training complete.")
+        if stop_requested["flag"]:
+            print(f"Stopped safely at step {step}/{total_steps} — checkpoint saved, rerun the same command to resume.")
+        else:
+            print("Training complete.")
 
     if ddp:
         import torch.distributed as dist

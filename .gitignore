@@ -3,7 +3,12 @@ __pycache__/
 *.pyc
 /checkpoints/
 /checkpoints_smoketest/
+/checkpoints_100m/
 /data/
 train.log
+train_100m.log
 *.log
 .DS_Store
+# Machine-specific local tooling (hardcoded to this laptop's sensor layout),
+# not part of the portable project.
+/scripts/

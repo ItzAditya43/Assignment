@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint
 
 from .layers import RMSNorm, TransformerBlock, precompute_rope
 from .kv_cache import ZenithKVCache
@@ -44,9 +45,16 @@ class ZenithTransformer(nn.Module):
         cos = self.rope_cos[start_pos:start_pos + seqlen].to(x.device)
         sin = self.rope_sin[start_pos:start_pos + seqlen].to(x.device)
 
+        use_checkpoint = self.cfg.grad_checkpoint and self.training and kv_cache is None
+
         for i, layer in enumerate(self.layers):
             layer_cache = kv_cache[i] if kv_cache is not None else None
-            x = layer(x, cos, sin, kv_cache=layer_cache)
+            if use_checkpoint:
+                x = torch.utils.checkpoint.checkpoint(
+                    layer, x, cos, sin, layer_cache, None, use_reentrant=False
+                )
+            else:
+                x = layer(x, cos, sin, kv_cache=layer_cache)
 
         x = self.norm(x)
         logits = self.output(x)

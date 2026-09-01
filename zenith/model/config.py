@@ -14,6 +14,12 @@ class ZenithConfig:
     norm_eps: float = 1e-5
     dropout: float = 0.0
     tie_embeddings: bool = True
+    # Trades compute for memory: recomputes each block's activations during the
+    # backward pass instead of storing them, cutting peak training VRAM at the
+    # cost of ~30% slower steps. Only applies during training (self.training),
+    # never during KV-cached inference. Use when memory, not time, is the
+    # binding constraint (e.g. a bigger model on a small local GPU).
+    grad_checkpoint: bool = False
 
     @property
     def head_dim(self) -> int:

@@ -1,0 +1,49 @@
+seed: 1337
+
+model:
+  vocab_size: 8192
+  # Same ~100.7M architecture as configs/zenith_kaggle.yaml, for comparable results.
+  dim: 768
+  n_layers: 16
+  n_heads: 12
+  n_kv_heads: 4
+  hidden_dim: 2048
+  max_seq_len: 512
+  rope_theta: 10000.0
+  dropout: 0.0
+  tie_embeddings: true
+  # Required to fit this model on a 4GB GPU: static state alone (params + grad +
+  # AdamW's 2 momentum buffers, all fp32) is ~1.6GB before any activations. This
+  # trades ~30% slower steps for far lower activation memory — verified safe
+  # via a short smoke test before any long unattended run (see README).
+  grad_checkpoint: true
+
+data:
+  train_path: data/train_packed_512.npy
+  val_path: data/val_packed_512.npy
+
+training:
+  # Deliberately tiny micro-batch (measured safe on a 4GB laptop GPU via smoke
+  # test — see README). grad_accum_steps compensates to keep the same
+  # effective batch size (128 sequences/step) as the Kaggle run.
+  micro_batch_size: 2
+  grad_accum_steps: 64
+  total_steps: 3000
+  warmup_steps: 300
+  max_lr: 3.0e-4
+  min_lr: 3.0e-5
+  weight_decay: 0.1
+  grad_clip: 1.0
+  checkpoint_dir: checkpoints_100m
+  checkpoint_every: 100
+  eval_every: 100
+  log_every: 10
+  # No DataLoader worker subprocesses — at micro_batch_size=2 the main process
+  # loading the batch itself is cheap, and this avoids extra CPU-competing
+  # processes so the rest of the machine stays responsive during a long
+  # background run (this is a GPU-bound job by design, not CPU-bound).
+  num_workers: 0
+  # Cap PyTorch's CPU thread pool so this background job doesn't grab every
+  # core and starve interactive/daily-use applications. Adjust to taste —
+  # this leaves most of a typical laptop's cores free.
+  cpu_threads: 2
